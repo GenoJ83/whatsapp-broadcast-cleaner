@@ -1,4 +1,6 @@
 import { WASocket } from '@whiskeysockets/baileys';
+import * as cliProgress from 'cli-progress';
+import * as fs from 'fs';
 
 export async function analyzeBroadcastLists(sock: WASocket, store: any) {
     console.log('\nFetching broadcast lists...');
@@ -20,21 +22,25 @@ export async function analyzeBroadcastLists(sock: WASocket, store: any) {
     }
 
     console.log(`\nFound ${broadcastJids.length} broadcast list(s). Analyzing participants...`);
+    const globalDeadNumbers: { listName: string; number: string }[] = [];
 
     for (const jid of broadcastJids) {
         try {
             console.log(`\n--- Broadcast List: ${jid} ---`);
             let recipients: string[] = [];
+            let listName = jid;
 
             // Try to get metadata as if it were a group, or try getBroadcastListInfo if it exists in this baileys fork
             if (typeof (sock as any).getBroadcastListInfo === 'function') {
                 const listInfo = await (sock as any).getBroadcastListInfo(jid);
                 recipients = listInfo.recipients || [];
+                if (listInfo.name) listName = listInfo.name;
             } else {
                 // Fallback: try groupMetadata
                 try {
                     const metadata = await sock.groupMetadata(jid);
                     recipients = metadata.participants.map(p => p.id);
+                    if (metadata.subject) listName = metadata.subject;
                 } catch (e: any) {
                     console.log('Could not fetch list participants using groupMetadata. Trying to extract from recent messages...');
                     // Try to find a recent message sent to this broadcast list to extract recipients
@@ -59,16 +65,23 @@ export async function analyzeBroadcastLists(sock: WASocket, store: any) {
             let deadNumbers = 0;
             const deadList: string[] = [];
             
+            const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
+            bar.start(recipients.length, 0);
+
             for (const recipientJid of recipients) {
                 const response = await sock.onWhatsApp(recipientJid);
                 const result = response?.[0];
                 if (!result || !result.exists) {
                     deadNumbers++;
-                    deadList.push(recipientJid.split('@')[0]);
+                    const num = recipientJid.split('@')[0];
+                    deadList.push(num);
+                    globalDeadNumbers.push({ listName, number: num });
                 }
+                bar.increment();
                 // Rate limit
                 await new Promise(resolve => setTimeout(resolve, 500));
             }
+            bar.stop();
             
             if (deadNumbers > 0) {
                 console.log(`⚠️ Found ${deadNumbers} dead number(s):`);
@@ -79,5 +92,11 @@ export async function analyzeBroadcastLists(sock: WASocket, store: any) {
         } catch (error: any) {
             console.error(`Failed to analyze broadcast list ${jid}:`, error.message);
         }
+    }
+
+    if (globalDeadNumbers.length > 0) {
+        const csvContent = 'Broadcast List,Dead Number\n' + globalDeadNumbers.map(entry => `"${entry.listName}","${entry.number}"`).join('\n');
+        fs.writeFileSync('dead_numbers_report.csv', csvContent, 'utf-8');
+        console.log(`\n📄 Saved ${globalDeadNumbers.length} dead numbers to dead_numbers_report.csv`);
     }
 }

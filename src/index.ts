@@ -13,8 +13,8 @@ async function main() {
         await analyzeBroadcastLists(sock, store);
         
         console.log('\nFinished analysis.');
-        console.log('Press Ctrl+C to exit.');
-        
+        console.log('Exiting gracefully...');
+        process.exit(0);
     } catch (error: any) {
         console.error('Error starting cleaner:', error.message);
         process.exit(1);
